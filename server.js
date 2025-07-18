@@ -1,32 +1,46 @@
 require('dotenv').config();
-const mongoose= require('mongoose')
-const express=require('express');//include the express module
-const cookieParser=require('cookie-parser');
-const authRoutes=require('./src/routes/authRoutes');
-const cors=require('cors');
-console.log(process.env.MONGO_URI);
+const mongoose = require('mongoose');
+const express = require('express'); // Include the express module
+const cookieParser = require('cookie-parser');
+const authRoutes = require('./src/routes/authRoutes');
+const linksRoutes = require('./src/routes/linksRoutes');
+const userRoutes = require('./src/routes/userRoutes');
+const paymentRoutes=require('./src/routes/paymentRoutes');
+const cors = require('cors');
+
 mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log('MongoDB Connected'))
-    .catch((error)=> console.log(error));
-const app=express(); //instantiate an express application
+    .catch((error) => console.log(error));
 
-app.use(express.json()); //middleware to parse JSON request bodies or convert json to javascript object
+const app = express(); // Instantiate express app.
+
+app.use((req, res, next) => {
+  // Skip JSON middleware for the webhook endpoint
+  if (req.originalUrl.startsWith('/payments/webhook')) {
+    return next();
+  }
+
+  express.json()(req, res, next);
+});
+
 app.use(cookieParser());
-const corsOption={
 
-    origin:process.env.CLIENT_ENDPOINT,
-    credentials: true,
+const corsOptions = {
+    origin: process.env.CLIENT_ENDPOINT,
+    credentials: true
 };
-app.use(cors(corsOption));
-app.use('/auth',authRoutes); // mounts auth routes at /auth prefix
- 
-const PORt=5001;
+app.use(cors(corsOptions));
+app.use('/api/auth', authRoutes);
+app.use('/links', linksRoutes);
+app.use('/users', userRoutes);
 
-app.listen(PORt,(error)=>{
-    if(error){
-        console.log(`Error in server setup`,error);
-    }
-    else{
-        console.log(`server is running at http://localhost:${PORt}`);
+app.use('/payments',paymentRoutes);
+
+const PORT = 5001;
+app.listen(5001, (error) => {
+    if (error) {
+        console.log('Error starting the server: ', error);
+    } else {
+        console.log(`Server is running at http://localhost:${PORT}`);
     }
 });
