@@ -18,8 +18,14 @@ const sendMail = async (options) => {
         html: options.html
     };
 
-    // 3. Actually send the email
-    await transporter.sendMail(mailOptions);
+    // 3. Actually send the email with error logging
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`Email sent to ${options.email} with subject: ${options.subject}`);
+    } catch (error) {
+        console.error(`Failed to send email to ${options.email}:`, error);
+        throw error; // Rethrow so the calling function can handle it
+    }
 };
 
 module.exports = sendMail;

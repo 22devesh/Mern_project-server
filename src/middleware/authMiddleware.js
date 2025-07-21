@@ -23,7 +23,7 @@ const authMiddleware = {
                         httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
                 path: '/',
-                sameSite: process.env.NODE_ENV == 'production' ? 'NONE' : 'Lax'
+                sameSite: process.env.NODE_ENV === 'production' ? 'NONE' : 'Lax'
                     });
                     request.user = user;
                     next();
