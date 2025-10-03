@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { attemptToRefreshToken } = require('../util/authUtil');
 
 const authMiddleware = {
     protect: async (request, response, next) => {
@@ -16,18 +17,20 @@ const authMiddleware = {
                 next();
             } catch (error) {
                 const refreshToken = request.cookies?.refreshToken;
-                if(refreshToken){
-                    const {newAccessToken, user} = 
+                if (refreshToken) {
+                    const { newAccessToken, user } =
                         await attemptToRefreshToken(refreshToken);
                     response.cookie('jwtToken', newAccessToken, {
                         httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                path: '/',
-                sameSite: process.env.NODE_ENV === 'production' ? 'NONE' : 'Lax'
+                        secure: process.env.NODE_ENV === 'production',
+                        path: '/',
+                        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
                     });
+
                     request.user = user;
                     next();
                 }
+
                 return response.status(401).json({
                     error: 'Unauthorized access'
                 });

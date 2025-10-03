@@ -1,269 +1,311 @@
 const Links = require("../model/Links");
 const Users = require("../model/Users");
-const axios = require('axios');
+const axios = require("axios");
 const { getDeviceInfo } = require("../util/linkUtil");
 const Clicks = require("../model/Clicks");
+const { generateUploadSignature } = require("../service/cloudinaryService");
 
 const linksController = {
-    create: async (request, response) => {
-        const { campaign_title, original_url, category } = request.body;
+  create: async (request, response) => {
+    const { campaign_title, original_url, category, thumbnail } = request.body;
 
-        try {
-            // We're fetching user details from DB even though we have
-            // it available in request object. The reason is critical operation.
-            // We're dealing with money and we want to pull latest information
-            // whenever we're transacting.
-            const user = await Users.findById({ _id: request.user.id });
+    try {
+      // We're fetching user details from DB even though we have
+      // it available in request object. The reason is critical operation.
+      // We're dealing with money and we want to pull latest information
+      // whenever we're transacting.
+      const user = await Users.findById({ _id: request.user.id });
 
-            const hasActiveSubscription = user.subscription &&
-                user.subscription.status === 'active';
+      const hasActiveSubscription =
+        user.subscription && user.subscription.status === "active";
 
-            if (!hasActiveSubscription && user.credits < 1) {
-                return response.status(400).json({
-                    message: 'Insufficient credit balance or no active subscription'
-                });
-            }
+      if (!hasActiveSubscription && user.credits < 1) {
+        return response.status(400).json({
+          message: "Insufficient credit balance or no active subscription",
+        });
+      }
 
-            const link = new Links({
-                campaignTitle: campaign_title,
-                originalUrl: original_url,
-                category: category,
-                user: request.user.role === 'admin' ?
-                    request.user.id : request.user.adminId
-            });
-            await link.save();
+      const link = new Links({
+        campaignTitle: campaign_title,
+        originalUrl: original_url,
+        category: category,
+        thumbnail: thumbnail,
+        user:
+          request.user.role === "admin"
+            ? request.user.id
+            : request.user.adminId,
+      });
+      await link.save();
 
-            if (!hasActiveSubscription) {
-                user.credits -= 1;
-                await user.save();
-            }
+      if (!hasActiveSubscription) {
+        user.credits -= 1;
+        await user.save();
+      }
 
-            response.json({
-                data: { linkId: link._id }
-            });
-        } catch (error) {
-            console.log(error);
-            response.status(500).json({
-                error: 'Internal server error'
-            });
-        }
-    },
+      response.json({
+        data: { linkId: link._id },
+      });
+    } catch (error) {
+      console.log(error);
+      response.status(500).json({
+        error: "Internal server error",
+      });
+    }
+  },
 
-    getAll: async (request, response) => {
-        try {
-            const userId = request.user.role === 'admin' ?
-                request.user.id : request.user.adminId;
-            const links = await Links
-                .find({ user: userId })
-                .sort({ createdAt: -1 });
-            response.json({ data: links });
-        } catch (error) {
-            console.log(error);
-            response.status(500).json({
-                error: 'Internal server error'
-            });
-        }
-    },
+  getAll: async (request, response) => {
+    try {
+      const {
+        currentPage = 0,
+        pageSize = 10, // Pagination
+        searchQuery = "",
+        sortField = "createdAt",
+        sortOrder = "desc", // Sorting
+      } = request.query;
 
-    getById: async (request, response) => {
-        try {
-            const linkId = request.params.id;
-            if (!linkId) {
-                return response.status(401)
-                    .json({ error: 'Link ID is required' });
-            }
+      const userId =
+        request.user.role === "admin" ? request.user.id : request.user.adminId;
 
-            const link = await Links.findById(linkId);
-            if (!link) {
-                return response.status(404)
-                    .json({ error: 'LinkID does not exist' });
-            }
+      const skip = parseInt(currentPage) * parseInt(pageSize);
+      const limit = parseInt(pageSize);
+      const sort = { [sortField]: sortOrder === "desc" ? -1 : 1 };
 
-            const userId = request.user.role === 'admin' ?
-                request.user.id : request.user.adminId;
-            // Make sure the link indeed belong to the logged in user.
-            if (link.user.toString() !== userId) {
-                return response.status(403).json({
-                    error: 'Unauthorized access'
-                });
-            }
+      const query = {
+        user: userId,
+      };
 
-            response.json({ data: link });
-        } catch (error) {
-            console.log(error);
-            response.status(500).json({
-                error: 'Internal server error'
-            });
-        }
-    },
+      if (searchQuery) {
+        query.$or = [
+          { campaignTitle: new RegExp(searchQuery, "i") },
+          { originalUrl: new RegExp(searchQuery, "i") },
+          { category: new RegExp(searchQuery, "i") },
+        ];
+      }
 
-    update: async (request, response) => {
-        try {
-            const linkId = request.params.id;
-            if (!linkId) {
-                return response.status(401)
-                    .json({ error: 'Link ID is required' });
-            }
+      const links = await Links.find(query).sort(sort).skip(skip).limit(limit);
 
-            let link = await Links.findById(linkId);
-            if (!link) {
-                return response.status(404)
-                    .json({ error: 'LinkID does not exist' });
-            }
+      const total = await Links.countDocuments(query);
+      response.json({ links, total });
+    } catch (error) {
+      console.log(error);
+      response.status(500).json({
+        error: "Internal server error",
+      });
+    }
+  },
 
-            const userId = request.user.role === 'admin' ?
-                request.user.id : request.user.adminId;
-            // Make sure the link indeed belong to the logged in user.
-            if (link.user.toString() !== userId) {
-                return response.status(403).json({
-                    error: 'Unauthorized access'
-                });
-            }
+  getById: async (request, response) => {
+    try {
+      const linkId = request.params.id;
+      if (!linkId) {
+        return response.status(401).json({ error: "Link ID is required" });
+      }
 
-            const { campaign_title, original_url, category } = request.body;
-            link = await Links.findByIdAndUpdate(linkId, {
-                campaignTitle: campaign_title,
-                originalUrl: original_url,
-                category: category
-            }, { new: true }); // new: true flag makes sure mongodb returns updated data after the update operation
+      const link = await Links.findById(linkId);
+      if (!link) {
+        return response.status(404).json({ error: "LinkID does not exist" });
+      }
 
-            // Return updated link data
-            response.json({ data: link });
-        } catch (error) {
-            console.log(error);
-            response.status(500).json({
-                error: 'Internal server error'
-            });
-        }
-    },
+      const userId =
+        request.user.role === "admin" ? request.user.id : request.user.adminId;
+      // Make sure the link indeed belong to the logged in user.
+      if (link.user.toString() !== userId) {
+        return response.status(403).json({
+          error: "Unauthorized access",
+        });
+      }
 
-    delete: async (request, response) => {
-        try {
-            const linkId = request.params.id;
-            if (!linkId) {
-                return response.status(401)
-                    .json({ error: 'Link ID is required' });
-            }
+      response.json({ data: link });
+    } catch (error) {
+      console.log(error);
+      response.status(500).json({
+        error: "Internal server error",
+      });
+    }
+  },
 
-            let link = await Links.findById(linkId);
-            if (!link) {
-                return response.status(404)
-                    .json({ error: 'LinkID does not exist' });
-            }
+  update: async (request, response) => {
+    try {
+      const linkId = request.params.id;
+      if (!linkId) {
+        return response.status(401).json({ error: "Link ID is required" });
+      }
 
-            const userId = request.user.role === 'admin' ?
-                request.user.id : request.user.adminId;
-            // Make sure the link indeed belong to the logged in user.
-            if (link.user.toString() !== userId) {
-                return response.status(403).json({
-                    error: 'Unauthorized access'
-                });
-            }
+      let link = await Links.findById(linkId);
+      if (!link) {
+        return response.status(404).json({ error: "LinkID does not exist" });
+      }
 
-            await link.deleteOne();
-            response.json({ message: 'Link deleted' });
-        } catch (error) {
-            console.log(error);
-            response.status(500).json({
-                error: 'Internal server error'
-            });
-        }
-    },
+      const userId =
+        request.user.role === "admin" ? request.user.id : request.user.adminId;
+      // Make sure the link indeed belong to the logged in user.
+      if (link.user.toString() !== userId) {
+        return response.status(403).json({
+          error: "Unauthorized access",
+        });
+      }
 
-    redirect: async (request, response) => {
-        try {
-            const linkId = request.params.id;
-            if (!linkId) {
-                return response.status(401)
-                    .json({ error: 'Link ID is required' });
-            }
+      const { campaign_title, original_url, category,thumbnail } = request.body;
+      link = await Links.findByIdAndUpdate(
+        linkId,
+        {
+          campaignTitle: campaign_title,
+          originalUrl: original_url,
+          category: category,
+          thumbnail: thumbnail,
+        },
+        { new: true }
+      ); // new: true flag makes sure mongodb returns updated data after the update operation
 
-            let link = await Links.findById(linkId);
-            if (!link) {
-                return response.status(404)
-                    .json({ error: 'LinkID does not exist' });
-            }
+      // Return updated link data
+      response.json({ data: link });
+    } catch (error) {
+      console.log(error);
+      response.status(500).json({
+        error: "Internal server error",
+      });
+    }
+  },
 
-            const isDevelopment = process.env.NODE_ENV === 'development';
-            const ipAddress = isDevelopment
-                ? '8.8.8.8'
-                : request.headers['x-forwarded-for']?.split(',')[0]
-                || request.socket.remoteAddress;
+  delete: async (request, response) => {
+    try {
+      const linkId = request.params.id;
+      if (!linkId) {
+        return response.status(401).json({ error: "Link ID is required" });
+      }
 
-            const geoResponse = await axios.get(`http://ip-api.com/json/${ipAddress}`);
-            const { city, country, region, lat, lon, isp  } = geoResponse.data;
+      let link = await Links.findById(linkId);
+      if (!link) {
+        return response.status(404).json({ error: "LinkID does not exist" });
+      }
 
-            const userAgent = request.headers['user-agent'] || 'unknown';
-            const { isMobile, browser } = getDeviceInfo(userAgent);
-            const deviceType = isMobile ? 'Mobile' : 'Desktop';
+      const userId =
+        request.user.role === "admin" ? request.user.id : request.user.adminId;
+      // Make sure the link indeed belong to the logged in user.
+      if (link.user.toString() !== userId) {
+        return response.status(403).json({
+          error: "Unauthorized access",
+        });
+      }
 
-            const referrer = request.get('Referrer') || null;
+      await link.deleteOne();
+      response.json({ message: "Link deleted" });
+    } catch (error) {
+      console.log(error);
+      response.status(500).json({
+        error: "Internal server error",
+      });
+    }
+  },
 
-            await Clicks.create({
-                linkId: link._id,
-                ip: ipAddress,
-                city: city,
-                country: country,
-                region: region,
-                latitude: lat,
-                longitude: lon,
-                isp: isp,
-                referrer: referrer,
-                userAgent: userAgent,
-                deviceType: deviceType,
-                browser: browser,
-                clickedAt: new Date()
-            });
+  redirect: async (request, response) => {
+    try {
+      const linkId = request.params.id;
+      if (!linkId) {
+        return response.status(401).json({ error: "Link ID is required" });
+      }
 
-            link.clickCount += 1;
-            await link.save();
+      let link = await Links.findById(linkId);
+      if (!link) {
+        return response.status(404).json({ error: "LinkID does not exist" });
+      }
 
-            response.redirect(link.originalUrl);
-        } catch (error) {
-            console.log(error);
-            response.status(500).json({
-                error: 'Internal server error'
-            });
-        }
-    },
+      const isDevelopment = process.env.NODE_ENV === "development";
+      const ipAddress = isDevelopment
+        ? "8.8.8.8"
+        : request.headers["x-forwarded-for"]?.split(",")[0] ||
+          request.socket.remoteAddress;
 
-    analytics: async (request, response) => {
-        try {
-            const { linkId, from, to } = request.query;
+      const geoResponse = await axios.get(
+        `http://ip-api.com/json/${ipAddress}`
+      );
+      const { city, country, region, lat, lon, isp } = geoResponse.data;
 
-            const link = await Links.findById({ _id: linkId });
-            if (!link) {
-                return response.status(404).json({
-                    error: 'Link not found'
-                });
-            }
+      const userAgent = request.headers["user-agent"] || "unknown";
+      const { isMobile, browser } = getDeviceInfo(userAgent);
+      const deviceType = isMobile ? "Mobile" : "Desktop";
 
-            const userId = request.user.role === 'admin'
-                ? request.user.id
-                : request.user.adminId
-            if (link.user.toString() !== userId) {
-                return response.status(403).json({
-                    error: 'Unauthorized'
-                });
-            }
+      const referrer = request.get("Referrer") || null;
 
-            const query = {
-                linkId: linkId
-            };
+      await Clicks.create({
+        linkId: link._id,
+        ip: ipAddress,
+        city: city,
+        country: country,
+        region: region,
+        latitude: lat,
+        longitude: lon,
+        isp: isp,
+        referrer: referrer,
+        userAgent: userAgent,
+        deviceType: deviceType,
+        browser: browser,
+        clickedAt: new Date(),
+      });
 
-            if (from && to) {
-                query.clickedAt = { $gte: new Date(from), $lte: new Date(to) };
-            }
+      link.clickCount += 1;
+      await link.save();
 
-            const data = await Clicks.find(query).sort({ clickedAt: -1 });
-            response.json(data);
-        } catch (error) {
-            console.log(error);
-            return response.status(500).json({
-                message: 'Internal server error'
-            });
-        }
-    },
+      response.redirect(link.originalUrl);
+    } catch (error) {
+      console.log(error);
+      response.status(500).json({
+        error: "Internal server error",
+      });
+    }
+  },
+
+  analytics: async (request, response) => {
+    try {
+      const { linkId, from, to } = request.query;
+
+      const link = await Links.findById({ _id: linkId });
+      if (!link) {
+        return response.status(404).json({
+          error: "Link not found",
+        });
+      }
+
+      const userId =
+        request.user.role === "admin" ? request.user.id : request.user.adminId;
+      if (link.user.toString() !== userId) {
+        return response.status(403).json({
+          error: "Unauthorized",
+        });
+      }
+
+      const query = {
+        linkId: linkId,
+      };
+
+      if (from && to) {
+        query.clickedAt = { $gte: new Date(from), $lte: new Date(to) };
+      }
+
+      const data = await Clicks.find(query).sort({ clickedAt: -1 });
+      response.json(data);
+    } catch (error) {
+      console.log(error);
+      return response.status(500).json({
+        message: "Internal server error",
+      });
+    }
+  },
+
+  createUploadSignature: async (request, response) => {
+    try {
+      const { signature, timestamp } = generateUploadSignature();
+
+      response.json({
+        signature: signature,
+        timestamp: timestamp,
+        apiKey: process.env.CLOUDINAR_API_KEY,
+        cloudName: process.env.CLOUDINAR_NAME,
+      });
+    } catch (error) {
+      response.status(500).json({ message: "Internal server error" });
+    }
+  },
 };
 
 module.exports = linksController;
